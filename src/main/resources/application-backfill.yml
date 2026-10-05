@@ -1,0 +1,8 @@
+# Used by the backfill command: no web server, no scheduler; the JVM exits when the run ends.
+spring:
+  main:
+    web-application-type: none
+market-data:
+  ingestion:
+    schedule:
+      enabled: false
