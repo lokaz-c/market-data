@@ -17,6 +17,13 @@ spring:
 server:
   port: ${PORT:8080}
   shutdown: graceful
+  # Behind a hosting proxy, trust X-Forwarded-For from private-network proxies so the rate limiter
+  # sees the client IP.
+  forward-headers-strategy: native
+  compression:
+    enabled: true
+    mime-types: application/json,application/problem+json,text/csv,text/html,text/css,application/javascript
+    min-response-size: 2KB
 
 management:
   endpoints:
@@ -28,7 +35,27 @@ management:
       probes:
         enabled: true
 
+springdoc:
+  swagger-ui:
+    path: /docs
+
 market-data:
+  api:
+    key-sha256: ${API_KEY_SHA256:}
+    # Alpaca's terms do not allow public display of its data without written consent, so only synthetic
+    # data is public by default. Set to alpaca,synthetic once consent is in place.
+    public-sources: ${PUBLIC_DATA_SOURCES:synthetic}
+    max-export-symbols: 100
+    cors-allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+    rate-limit:
+      enabled: ${RATE_LIMIT_ENABLED:true}
+      capacity: 30
+      requests-per-minute: 60
+  demo:
+    seed-when-no-keys: ${DEMO_SEED:false}
+    symbols: ${DEMO_SYMBOLS:50}
+    years: ${DEMO_YEARS:10}
+    seed: 0.42
   alpaca:
     base-url: ${ALPACA_DATA_URL:https://data.alpaca.markets}
     key-id: ${ALPACA_API_KEY_ID:}
