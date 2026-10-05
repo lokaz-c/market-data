@@ -1,0 +1,48 @@
+package com.lokaz.marketdata;
+
+import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.options;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+
+import com.github.tomakehurst.wiremock.WireMockServer;
+
+/**
+ * Base for tests that need the full application: a real PostgreSQL (Testcontainers) with Flyway migrations
+ * applied, and WireMock standing in for Alpaca. Tables are emptied before each test.
+ */
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@Import(TestcontainersConfiguration.class)
+@ActiveProfiles("test")
+public abstract class IntegrationTest {
+
+    protected static final WireMockServer alpaca = new WireMockServer(options().dynamicPort());
+
+    static {
+        alpaca.start();
+    }
+
+    @DynamicPropertySource
+    static void alpacaUrl(DynamicPropertyRegistry registry) {
+        registry.add("market-data.alpaca.base-url", alpaca::baseUrl);
+    }
+
+    @Autowired
+    protected JdbcClient jdbc;
+
+    @BeforeEach
+    void resetState() {
+        alpaca.resetAll();
+        jdbc.sql("TRUNCATE bars, splits, ingestion_runs, symbols RESTART IDENTITY CASCADE").update();
+    }
+
+    protected int count(String table) {
+        return jdbc.sql("SELECT count(*) FROM " + table).query(Integer.class).single();
+    }
+}
