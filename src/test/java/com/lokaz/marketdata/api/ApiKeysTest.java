@@ -65,7 +65,8 @@ class ApiKeysTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"%s", "%s:", "%s:rate-limit,admin", "abc123:rate-limit", "%sff:export", "%s:export;%<s:rate-limit"})
+    @ValueSource(strings = {"%s", "%s:", "%s:rate-limit,admin", "abc123:rate-limit", "%sff:export",
+            "%s:export;%<s:rate-limit"})
     void aMalformedEntryStopsStartup(String template) {
         String entry = template.formatted(sha256Hex("k"));
         assertThatThrownBy(() -> keys(List.of(), entry)).isInstanceOf(IllegalArgumentException.class)

@@ -13,10 +13,12 @@ import org.springframework.validation.annotation.Validated;
 /**
  * @param keySha256           SHA-256 hex digests of API keys that have every scope (API_KEY_SHA256,
  *                            comma-separated). The original setting, kept so existing deployments behave as before.
- * @param keys                scoped API keys (API_KEYS): {@code <sha256 hex>:<scope>[,<scope>...]} entries separated by
- *                            semicolons; scopes are rate-limit, alpaca-data and export (see {@link ApiKeys})
- * @param publicSources       symbol sources served without the alpaca-data scope (PUBLIC_DATA_SOURCES). Defaults to
- *                            synthetic only: Alpaca's terms forbid publicly displaying its data without written consent.
+ * @param keys                scoped API keys (API_KEYS): {@code <sha256 hex>:<scope>[,<scope>...]} entries
+ *                            separated by semicolons; scopes are rate-limit, alpaca-data and export (see
+ *                            {@link ApiKeys})
+ * @param publicSources       symbol sources served without the alpaca-data scope (PUBLIC_DATA_SOURCES). Defaults
+ *                            to synthetic only: Alpaca's terms forbid publicly displaying its data without written
+ *                            consent.
  * @param maxExportSymbols    symbols per export request
  * @param corsAllowedOrigins  origins allowed to call /v1 from a browser (CORS_ALLOWED_ORIGINS), for hosting
  *                            the chart explorer on a separate static host

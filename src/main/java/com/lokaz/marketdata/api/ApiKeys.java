@@ -37,6 +37,7 @@ public class ApiKeys {
 
     private static final Logger log = LoggerFactory.getLogger(ApiKeys.class);
     private static final int SHA256_HEX_LENGTH = 64;
+    private static final Set<Scope> EVERY_SCOPE = Collections.unmodifiableSet(EnumSet.allOf(Scope.class));
 
     private record Entry(byte[] digest, Set<Scope> scopes) {
     }
@@ -48,7 +49,7 @@ public class ApiKeys {
         int legacy = 0;
         for (String digest : properties.keySha256()) {
             if (!digest.isBlank()) {
-                parsed.add(new Entry(parseDigest(digest, "API_KEY_SHA256"), Collections.unmodifiableSet(EnumSet.allOf(Scope.class))));
+                parsed.add(new Entry(parseDigest(digest, "API_KEY_SHA256"), EVERY_SCOPE));
                 legacy++;
             }
         }

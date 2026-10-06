@@ -15,7 +15,8 @@ import tools.jackson.databind.json.JsonMapper;
 class RateLimitFilterTest {
 
     private final RateLimitFilter filter = new RateLimitFilter(
-            new ApiProperties(List.of(), "", List.of("synthetic"), 100, List.of(), new ApiProperties.RateLimit(true, 2, 60)),
+            new ApiProperties(List.of(), "", List.of("synthetic"), 100, List.of(),
+                    new ApiProperties.RateLimit(true, 2, 60)),
             new Problems(JsonMapper.builder().build()));
 
     private MockHttpServletResponse call(String ip, String path, Set<Scope> scopes) throws Exception {
