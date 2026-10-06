@@ -6,7 +6,7 @@ import java.util.Optional;
 
 import org.jspecify.annotations.Nullable;
 
-/** A raw daily bar ready to be written to the bars table. */
+/** A raw daily bar ready to be written to the bars table; {@code feed} is the Alpaca feed it was requested from. */
 public record BarRow(
         int symbolId,
         LocalDate ts,
@@ -16,7 +16,8 @@ public record BarRow(
         BigDecimal close,
         long volume,
         @Nullable Long tradeCount,
-        @Nullable BigDecimal vwap) {
+        @Nullable BigDecimal vwap,
+        @Nullable String feed) {
 
     /**
      * Checks the same invariants as the CHECK constraints on bars. Rejecting a bad row here means one

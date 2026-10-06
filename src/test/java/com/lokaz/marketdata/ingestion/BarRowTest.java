@@ -12,7 +12,7 @@ class BarRowTest {
 
     private static BarRow bar(String open, String high, String low, String close, long volume) {
         return new BarRow(1, LocalDate.of(2024, 1, 3), new BigDecimal(open), new BigDecimal(high),
-                new BigDecimal(low), new BigDecimal(close), volume, 10L, new BigDecimal(low));
+                new BigDecimal(low), new BigDecimal(close), volume, 10L, new BigDecimal(low), "iex");
     }
 
     @ParameterizedTest(name = "{0}/{1}/{2}/{3} vol {4} -> {5}")
