@@ -1,0 +1,46 @@
+# Render Blueprint for market-data. NOT ACTIVE: Render only reads this file when someone creates a
+# Blueprint from it in the dashboard (New > Blueprint, Blueprint path: deploy/render.yaml). See the
+# "Deploy" section of the README. The database is Neon's free tier, not Render Postgres (whose free
+# databases expire after 30 days).
+services:
+  - type: web
+    runtime: docker
+    name: market-data
+    # Must be explicit: without it Render creates a paid instance.
+    plan: free
+    # Keep the web service and the Neon database in the same area (Neon aws-us-west-2).
+    region: oregon
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Liveness does not touch the database, so Render's frequent health checks never keep Neon awake.
+    healthCheckPath: /actuator/health/liveness
+    autoDeployTrigger: checksPass
+    envVars:
+      # Neon connection, split for JDBC: jdbc:postgresql://<host>/<db>?sslmode=require
+      - key: SPRING_DATASOURCE_URL
+        sync: false
+      - key: SPRING_DATASOURCE_USERNAME
+        sync: false
+      - key: SPRING_DATASOURCE_PASSWORD
+        sync: false
+      # Optional: SHA-256 of the key the backtester and TradeDesk send as X-API-Key.
+      - key: API_KEY_SHA256
+        sync: false
+      # Ingestion runs in GitHub Actions (.github/workflows/ingest.yml), not on the sleeping web instance.
+      - key: INGEST_SCHEDULE_ENABLED
+        value: "false"
+      # Public endpoints show synthetic data only until Alpaca gives written consent for public display.
+      - key: PUBLIC_DATA_SOURCES
+        value: synthetic
+      - key: DEMO_SEED
+        value: always
+      - key: DEMO_SYMBOLS
+        value: "50"
+      - key: DB_POOL_SIZE
+        value: "3"
+      # 512 MB / 0.1 CPU instance: a larger heap share than the image default, the serial collector (least
+      # overhead, and the one the image's AOT cache was trained with), smaller thread stacks, and C1-only JIT:
+      # C2 compiler threads compete for the 0.1 CPU during start-up. Measured in docs/coldstart.md.
+      - key: JAVA_TOOL_OPTIONS
+        value: "-XX:MaxRAMPercentage=70 -XX:+UseSerialGC -Xss512k -XX:TieredStopAtLevel=1"
