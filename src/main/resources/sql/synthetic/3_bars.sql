@@ -9,9 +9,9 @@
 INSERT INTO bars (symbol_id, ts, open, high, low, close, volume, trade_count, vwap)
 WITH params AS (
     SELECT id AS symbol_id,
-           20 + random() * 480         AS start_price,
+           20 + random() * 280         AS start_price,
            -0.0001 + random() * 0.0005 AS drift,       -- daily log drift: -2.5% to +10% a year
-           0.008 + random() * 0.022    AS vol,         -- daily log volatility: 0.8% to 3%
+           0.008 + random() * 0.012    AS vol,         -- daily log volatility: 0.8% to 2% (about 13% to 32% a year)
            300000 + random() * 9700000 AS base_volume
     FROM symbols
     WHERE source = 'synthetic'
