@@ -127,6 +127,9 @@ class IndicatorsIT extends ApiTest {
         // Three sessions are not enough for 20/50-day or 52-week ranges.
         assertThat(levels.get("range20d").get("high").isNull()).isTrue();
         assertThat(levels.get("range52w").get("low").isNull()).isTrue();
+
+        // Nothing on or before asOf: a 404 problem, not an empty body.
+        assertThat(get("/v1/levels/HAND?asOf=2023-12-29").status()).isEqualTo(404);
     }
 
     @Test
