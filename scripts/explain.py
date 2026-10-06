@@ -9,8 +9,9 @@ What it does:
      that has been bulk-loaded before its index exists.
   3. Generates SYNTHETIC data with the same SQL the app's demo seeder uses (src/main/resources/sql/synthetic):
      500 symbols x 10 years of weekday bars, inserted date by date like a daily ingestion job.
-  4. Runs each query from src/main/resources/sql/api (the exact files the service executes), plus the first
-     version of the levels query (scripts/sql) for comparison, in three states:
+  4. Runs each query from src/main/resources/sql/api (the exact files the service executes), plus two comparison
+     queries from scripts/sql against the split-adjusted view as V2 defined it (bars_split_adjusted_v2), in three
+     states:
        A. no index on bars;
        B. the primary key (symbol_id, ts) from V1__core_tables.sql;
        C. B plus CLUSTER bars USING bars_pkey (rows physically ordered by symbol, then date).
@@ -45,16 +46,29 @@ SEED = 0.42
 RUNS = 7
 TICKER = "S250"
 
+# (title, SQL file, endpoint, parameter overrides). Limits are what the service sends: page size + 1 for keyset
+# pages, N for last=N.
 QUERIES = [
     ("Bars page: 1 year, split-adjusted", "src/main/resources/sql/api/bars_page_split.sql",
-     "GET /v1/bars/{ticker}?from=2025-10-02&to=2026-10-02&limit=1000"),
+     "GET /v1/bars/{ticker}?from=2025-10-02&to=2026-10-02&limit=1000", {}),
+    ("Latest 100 bars, split-adjusted", "src/main/resources/sql/api/bars_latest_split.sql",
+     "GET /v1/bars/{ticker}?last=100", {"limit": "100"}),
+    ("Latest 100 bars on the V2 view (WITH clause, not flattened)", "scripts/sql/bars_latest_v2_view.sql",
+     "comparison: the view before V3", {"limit": "100"}),
     ("Indicators page: 1 year (window functions over 1 year + 400 days)", "src/main/resources/sql/api/indicators.sql",
-     "GET /v1/indicators/{ticker}?from=2025-10-02&to=2026-10-02&limit=1000"),
-    ("Levels as of the latest session", "src/main/resources/sql/api/levels.sql", "GET /v1/levels/{ticker}"),
-    ("Levels, first version (bounds joined from a CTE)", "scripts/sql/levels_v1_anchor_join.sql",
-     "replaced; kept for comparison"),
-    ("Latest bar date (default `to`)", "src/main/resources/sql/api/latest_bar_date.sql", "every bars/indicators call without `to`"),
-    ("Symbol list with first/last bar (LATERAL)", "src/main/resources/sql/api/list_symbols.sql", "GET /v1/symbols?limit=50"),
+     "GET /v1/indicators/{ticker}?from=2025-10-02&to=2026-10-02&limit=1000", {}),
+    ("Levels as of the latest session", "src/main/resources/sql/api/levels.sql", "GET /v1/levels/{ticker}", {}),
+    ("Levels, first version (bounds joined from a CTE), on the V2 view", "scripts/sql/levels_v1_anchor_join.sql",
+     "comparison: replaced before V3", {}),
+    ("Latest bar date (default `to`)", "src/main/resources/sql/api/latest_bar_date.sql",
+     "every bars/indicators call without `to`", {}),
+    ("Symbol lookup with its data version (the ETag check)", "src/main/resources/sql/api/find_symbol.sql",
+     "every per-ticker call; all a 304 reads", {}),
+    ("Splits of one symbol", "src/main/resources/sql/api/splits.sql", "GET /v1/splits/{ticker}", {}),
+    ("Symbol list with first/last bar (LATERAL), first page", "src/main/resources/sql/api/list_symbols.sql",
+     "GET /v1/symbols?limit=50", {"limit": "51"}),
+    ("Symbol list, a later page (keyset on ticker)", "src/main/resources/sql/api/list_symbols.sql",
+     "GET /v1/symbols?after=S400&limit=50", {"limit": "51", "after": "'S400'"}),
 ]
 
 STATES = [
@@ -116,9 +130,21 @@ def start_database() -> None:
     sys.exit("PostgreSQL did not start")
 
 
+def v2_view() -> str:
+    """The split-adjusted view as V2 defined it (split factors in a WITH clause), as bars_split_adjusted_v2.
+
+    V3 replaced it because PostgreSQL never flattens a subquery that has a WITH list; the comparison queries in
+    scripts/sql run against this copy to show the difference."""
+    text = (MIGRATIONS / "V2__split_adjusted_view.sql").read_text()
+    start = text.index("CREATE VIEW bars_split_adjusted AS")
+    view = text[start:text.index(";", start) + 1]
+    return view.replace("CREATE VIEW bars_split_adjusted AS", "CREATE VIEW bars_split_adjusted_v2 AS")
+
+
 def load_data() -> float:
     for migration in sorted(MIGRATIONS.glob("V*.sql"), key=lambda p: int(p.name[1:].split("__")[0])):
         psql(migration.read_text())
+    psql(v2_view())
     psql("ALTER TABLE bars DROP CONSTRAINT bars_pkey;")
     params = {"symbols": str(SYMBOLS), "years": str(YEARS), "endDate": f"'{END_DATE}'"}
     generator = "\n".join(bind((SQL / f"synthetic/{name}").read_text(), params) + ";"
@@ -162,7 +188,8 @@ def main() -> None:
         symbol_id = psql(f"SELECT id FROM symbols WHERE ticker = '{TICKER}';").strip()
         params = {
             "symbolId": symbol_id, "fromDate": "'2025-10-02'", "toDate": f"'{END_DATE}'", "limit": "1001",
-            "asOf": f"'{END_DATE}'", "prefix": "''", "sources": "'{synthetic}'",
+            "asOf": f"'{END_DATE}'", "prefix": "''", "after": "''", "sources": "'{synthetic}'",
+            "ticker": f"'{TICKER}'",
         }
         results: dict[str, dict[str, tuple[float, int, int, str]]] = {}
         for state, label in STATES:
@@ -171,8 +198,8 @@ def main() -> None:
             if state == "C":
                 psql("CLUSTER bars USING bars_pkey; ANALYZE bars;")
             print(f"State {state}: {label}")
-            for title, file, _ in QUERIES:
-                sql = bind((ROOT / file).read_text(), dict(params, limit="50" if "list_symbols" in file else "1001"))
+            for title, file, _, overrides in QUERIES:
+                sql = bind((ROOT / file).read_text(), dict(params, **overrides))
                 results.setdefault(title, {})[state] = explain(sql)
                 print(f"  {title}: {results[title][state][0]:.3f} ms")
         write_report(machine(), data, generation_seconds, results)
@@ -210,7 +237,7 @@ def write_report(host: dict[str, str], data: dict[str, str], generation_seconds:
         "| Query | Endpoint | A: no index | B: primary key | C: PK + CLUSTER |",
         "|---|---|---:|---:|---:|",
     ]
-    for title, _, endpoint in QUERIES:
+    for title, _, endpoint, _ in QUERIES:
         cells = []
         for state, _ in STATES:
             ms, hit, read = results[title][state][:3]
@@ -222,7 +249,7 @@ def write_report(host: dict[str, str], data: dict[str, str], generation_seconds:
         "## Plans",
         "",
     ]
-    for title, file, _ in QUERIES:
+    for title, file, _, _ in QUERIES:
         lines += [f"### {title}", "", f"SQL: `{file}`", ""]
         for state, label in STATES:
             ms, hit, read, text = results[title][state]
