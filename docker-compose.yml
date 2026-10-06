@@ -1,0 +1,53 @@
+# One-command local run: `docker compose up --build`, then open http://localhost:8080.
+# Without Alpaca keys the app seeds SYNTHETIC demo data. Put keys in .env (see .env.example) to ingest real
+# bars instead; compose reads .env automatically.
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: marketdata
+      POSTGRES_USER: marketdata
+      # Local development only; the deployed database uses its own credentials.
+      POSTGRES_PASSWORD: marketdata
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      # PostgreSQL 18+ images keep data under /var/lib/postgresql/18/docker; mount the parent.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketdata -d marketdata"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/marketdata
+      SPRING_DATASOURCE_USERNAME: marketdata
+      SPRING_DATASOURCE_PASSWORD: marketdata
+      ALPACA_API_KEY_ID: ${ALPACA_API_KEY_ID:-}
+      ALPACA_API_SECRET_KEY: ${ALPACA_API_SECRET_KEY:-}
+      ALPACA_FEED: ${ALPACA_FEED:-iex}
+      INGEST_SYMBOLS: ${INGEST_SYMBOLS:-}
+      DEMO_SEED: ${DEMO_SEED:-when-no-keys}
+      DEMO_SYMBOLS: ${DEMO_SYMBOLS:-50}
+      DEMO_YEARS: ${DEMO_YEARS:-10}
+      API_KEY_SHA256: ${API_KEY_SHA256:-}
+      PUBLIC_DATA_SOURCES: ${PUBLIC_DATA_SOURCES:-synthetic}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    healthcheck:
+      # Readiness turns UP after startup runners finish, i.e. once demo data is seeded.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health/readiness | grep -q UP"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+      start_period: 10s
+
+volumes:
+  pgdata:
