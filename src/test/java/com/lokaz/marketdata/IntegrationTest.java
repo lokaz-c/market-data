@@ -28,9 +28,23 @@ public abstract class IntegrationTest {
         alpaca.start();
     }
 
+    /** The API key tests send; only its SHA-256 digest is configured, as in production. */
+    public static final String TEST_API_KEY = "test-api-key";
+
     @DynamicPropertySource
-    static void alpacaUrl(DynamicPropertyRegistry registry) {
+    static void testProperties(DynamicPropertyRegistry registry) {
         registry.add("market-data.alpaca.base-url", alpaca::baseUrl);
+        registry.add("market-data.api.key-sha256", () -> sha256Hex(TEST_API_KEY));
+    }
+
+    private static String sha256Hex(String value) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Autowired

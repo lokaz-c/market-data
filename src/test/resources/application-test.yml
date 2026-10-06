@@ -10,3 +10,8 @@ market-data:
     symbols: AAPL,TSLA
     schedule:
       enabled: false
+  api:
+    # key-sha256 is set in IntegrationTest from the plain test key.
+    public-sources: synthetic
+    rate-limit:
+      enabled: false
