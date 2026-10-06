@@ -23,6 +23,13 @@ class BackfillArgumentsTest {
         assertThat(parsed.from()).isEqualTo(LocalDate.of(2016, 1, 1));
         assertThat(parsed.to()).isEqualTo(LocalDate.of(2020, 12, 31));
         assertThat(parsed.symbols()).containsExactly("AAPL", "MSFT");
+        assertThat(parsed.kind()).isEqualTo(IngestionKind.BACKFILL);
+    }
+
+    @Test
+    void scheduledRunsCanLabelThemselvesDaily() {
+        assertThat(parse("--from=2026-09-28", "--kind=daily").kind()).isEqualTo(IngestionKind.DAILY);
+        assertThatThrownBy(() -> parse("--from=2026-09-28", "--kind=weekly")).hasMessageContaining("--kind");
     }
 
     @Test

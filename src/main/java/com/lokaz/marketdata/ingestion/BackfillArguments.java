@@ -8,10 +8,11 @@ import java.util.List;
 import org.springframework.boot.ApplicationArguments;
 
 /**
- * Parses {@code --from=YYYY-MM-DD --to=YYYY-MM-DD --symbols=AAPL,MSFT}. {@code --to} defaults to today and
- * {@code --symbols} to the configured INGEST_SYMBOLS.
+ * Parses {@code --from=YYYY-MM-DD --to=YYYY-MM-DD --symbols=AAPL,MSFT --kind=backfill|daily}. {@code --to}
+ * defaults to today, {@code --symbols} to the configured INGEST_SYMBOLS, and {@code --kind} (the label in
+ * ingestion_runs) to backfill; the scheduled GitHub Actions ingestion passes --kind=daily.
  */
-record BackfillArguments(LocalDate from, LocalDate to, List<String> symbols) {
+record BackfillArguments(LocalDate from, LocalDate to, List<String> symbols, IngestionKind kind) {
 
     static BackfillArguments parse(ApplicationArguments args, LocalDate today, List<String> defaultSymbols) {
         LocalDate from = date(single(args, "from"), "from");
@@ -21,7 +22,14 @@ record BackfillArguments(LocalDate from, LocalDate to, List<String> symbols) {
         LocalDate to = date(single(args, "to"), "to");
         String symbolsArg = single(args, "symbols");
         List<String> symbols = symbolsArg == null ? defaultSymbols : Arrays.asList(symbolsArg.split(","));
-        return new BackfillArguments(from, to == null ? today : to, Tickers.normalizeAll(symbols));
+        String kindArg = single(args, "kind");
+        IngestionKind kind;
+        try {
+            kind = kindArg == null ? IngestionKind.BACKFILL : IngestionKind.valueOf(kindArg.toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("--kind must be backfill or daily, got '" + kindArg + "'");
+        }
+        return new BackfillArguments(from, to == null ? today : to, Tickers.normalizeAll(symbols), kind);
     }
 
     private static String single(ApplicationArguments args, String name) {
