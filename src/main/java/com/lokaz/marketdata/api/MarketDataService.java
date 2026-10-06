@@ -56,8 +56,8 @@ public class MarketDataService {
             return latestBars(symbol, query, query.last());
         }
         Window window = window(symbol, query.from(), query.to(), query.after());
-        List<Bar> rows = window.isEmpty() ? List.of()
-                : repository.barsPage(symbol.id(), query.splitAdjusted(), window.lower(), window.to(), query.limit() + 1);
+        List<Bar> rows = window.isEmpty() ? List.of() : repository.barsPage(symbol.id(), query.splitAdjusted(),
+                window.lower(), window.to(), query.limit() + 1);
         Page<Bar, LocalDate> page = Page.of(rows, query.limit(), Bar::date);
         return new BarsPage(symbol.ticker(), symbol.source(), query.adjustment(), window.from(), window.to(),
                 page.items(), page.nextAfter());

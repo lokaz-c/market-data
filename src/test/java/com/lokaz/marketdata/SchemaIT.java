@@ -13,7 +13,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.support.TransactionTemplate;
 
-/** The CHECK constraints are the last line of defence and the triggers keep data versions honest; these tests make sure they bite. */
+/**
+ * The CHECK constraints are the last line of defence and the triggers keep data versions honest; these tests make
+ * sure they bite.
+ */
 class SchemaIT extends IntegrationTest {
 
     @Autowired
@@ -67,7 +70,8 @@ class SchemaIT extends IntegrationTest {
             var versions = new java.util.ArrayList<String>();
             for (String day : new String[] {"2024-01-02", "2024-01-03", "2024-01-04"}) {
                 jdbc.sql("INSERT INTO bars (symbol_id, ts, open, high, low, close, volume) "
-                        + "VALUES (:id, CAST(:day AS date), 1, 1, 1, 1, 1)").param("id", symbolId).param("day", day).update();
+                        + "VALUES (:id, CAST(:day AS date), 1, 1, 1, 1, 1)")
+                        .param("id", symbolId).param("day", day).update();
                 versions.add(jdbc.sql("SELECT ctid::text || (data_changed_at = now()) FROM symbols WHERE id = :id")
                         .param("id", symbolId).query(String.class).single());
             }
