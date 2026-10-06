@@ -54,6 +54,10 @@ springdoc:
 
 market-data:
   api:
+    # Scoped keys: <sha256 hex>:<scope>[,<scope>] entries separated by semicolons; scopes are rate-limit,
+    # alpaca-data and export. Only digests are configured, never keys.
+    keys: ${API_KEYS:}
+    # The original setting: comma-separated digests of keys that get every scope.
     key-sha256: ${API_KEY_SHA256:}
     # Alpaca's terms do not allow public display of its data without written consent, so only synthetic
     # data is public by default. Set to alpaca,synthetic once consent is in place.

@@ -24,8 +24,9 @@ services:
         sync: false
       - key: SPRING_DATASOURCE_PASSWORD
         sync: false
-      # Optional: SHA-256 of the key the backtester and TradeDesk send as X-API-Key.
-      - key: API_KEY_SHA256
+      # Optional: scoped API keys as <sha256>:<scope>[,<scope>] entries separated by semicolons, for example
+      # rate-limit for TradeDesk and rate-limit,alpaca-data,export for the backtester (see the README).
+      - key: API_KEYS
         sync: false
       # Ingestion runs in GitHub Actions (.github/workflows/ingest.yml), not on the sleeping web instance.
       - key: INGEST_SCHEDULE_ENABLED
