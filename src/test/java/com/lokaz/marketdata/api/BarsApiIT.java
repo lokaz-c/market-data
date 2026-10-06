@@ -76,6 +76,77 @@ class BarsApiIT extends ApiTest {
     }
 
     @Test
+    void lastReturnsTheLatestBarsOldestFirstAsOnePage() {
+        List<TestSeries.Bar> bars = load("SYNA", "synthetic", 250);
+
+        JsonNode page = get("/v1/bars/SYNA?last=5").json();
+
+        assertThat(page.get("bars")).extracting(b -> b.get("date").asString())
+                .containsExactly(bars.subList(245, 250).stream().map(b -> b.date().toString()).toArray(String[]::new));
+        assertThat(page.get("from").asString()).isEqualTo(bars.get(245).date().toString());
+        assertThat(page.get("to").asString()).isEqualTo(bars.getLast().date().toString());
+        assertThat(page.get("nextAfter").isNull()).isTrue();
+    }
+
+    @Test
+    void lastCountsBackFromTo() {
+        List<TestSeries.Bar> bars = load("SYNA", "synthetic", 250);
+
+        JsonNode page = get("/v1/bars/SYNA?last=3&to=" + bars.get(100).date()).json();
+
+        assertThat(page.get("bars")).extracting(b -> b.get("date").asString())
+                .containsExactly(bars.get(98).date().toString(), bars.get(99).date().toString(),
+                        bars.get(100).date().toString());
+    }
+
+    @Test
+    void lastIsSplitAdjustedUnlessRawIsAsked() {
+        int id = insertSymbol("SPLT", "synthetic");
+        insertBars(id, List.of(
+                new TestSeries.Bar(LocalDate.of(2024, 1, 2), TestSeries.money(400), TestSeries.money(410),
+                        TestSeries.money(390), TestSeries.money(400), 1000),
+                new TestSeries.Bar(LocalDate.of(2024, 1, 3), TestSeries.money(101), TestSeries.money(103),
+                        TestSeries.money(99), TestSeries.money(102), 4000)));
+        insertSplit(id, LocalDate.of(2024, 1, 3), 1, 4);
+
+        JsonNode split = get("/v1/bars/SPLT?last=2").json().get("bars");
+        JsonNode raw = get("/v1/bars/SPLT?last=2&adjustment=raw").json().get("bars");
+
+        assertThat(decimal(split.get(0).get("close"))).isEqualByComparingTo("100");
+        assertThat(decimal(raw.get(0).get("close"))).isEqualByComparingTo("400");
+        assertThat(decimal(split.get(1).get("close"))).isEqualByComparingTo("102");
+    }
+
+    @Test
+    void lastCannotBeCombinedWithPagingParametersAndIsCapped() {
+        load("SYNA", "synthetic", 5);
+
+        for (String query : List.of("last=5&from=2024-01-01", "last=5&after=2024-01-02", "last=5&limit=5")) {
+            Response response = get("/v1/bars/SYNA?" + query);
+            assertThat(response.status()).as(query).isEqualTo(400);
+            assertThat(response.json().get("detail").asString()).as(query).contains("last cannot be combined");
+        }
+        Response tooMany = get("/v1/bars/SYNA?last=1001");
+        assertThat(tooMany.status()).isEqualTo(400);
+        assertThat(tooMany.json().get("errors").get(0).get("parameter").asString()).isEqualTo("last");
+        assertThat(get("/v1/bars/SYNA?last=0").status()).isEqualTo(400);
+    }
+
+    @Test
+    void barsNameTheirFeedOnlyWhenItWasRecorded() {
+        load("SYNA", "synthetic", 2);
+        int aapl = insertSymbol("AAPL", "alpaca");
+        insertBars(aapl, TestSeries.weekdays(START, 2));
+        jdbc.sql("UPDATE bars SET feed = 'iex' WHERE symbol_id = :id").param("id", aapl).update();
+
+        JsonNode synthetic = get("/v1/bars/SYNA").json().get("bars").get(0);
+        JsonNode alpaca = getWithKey("/v1/bars/AAPL", API_KEY).json().get("bars").get(0);
+
+        assertThat(synthetic.has("feed")).isFalse();
+        assertThat(alpaca.get("feed").asString()).isEqualTo("iex");
+    }
+
+    @Test
     void unknownTickerIsAProblemDetail404() {
         Response response = get("/v1/bars/NOPE");
 

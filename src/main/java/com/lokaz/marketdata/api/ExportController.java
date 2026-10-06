@@ -43,7 +43,10 @@ public class ExportController {
     }
 
     @GetMapping(value = "/v1/export/bars.csv", produces = "text/csv")
-    @Operation(summary = "Stream daily bars for several symbols as CSV", security = @SecurityRequirement(name = "apiKey"))
+    @Operation(summary = "Stream daily bars for several symbols as CSV",
+            description = "Columns: ticker,date,open,high,low,close,volume,source,feed. source is alpaca or "
+                    + "synthetic; feed is the Alpaca feed (iex or sip), empty for synthetic data.",
+            security = @SecurityRequirement(name = "apiKey"))
     public ResponseEntity<StreamingResponseBody> exportBars(
             @RequestParam @NotBlank String symbols,
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate from,
@@ -66,7 +69,9 @@ public class ExportController {
         boolean splitAdjusted = adjustment.equals("split");
         StreamingResponseBody body = out -> {
             var writer = new BufferedWriter(new OutputStreamWriter(out, StandardCharsets.UTF_8));
-            writer.write("ticker,date,open,high,low,close,volume\n");
+            // source: alpaca or synthetic, per symbol. feed: the Alpaca feed per bar (iex or sip), empty when not
+            // recorded (synthetic data, or bars ingested before feeds were recorded).
+            writer.write("ticker,date,open,high,low,close,volume,source,feed\n");
             service.exportCsv(resolved, from, to, splitAdjusted, writer);
             writer.flush();
         };

@@ -12,7 +12,7 @@ class OpenApiIT extends ApiTest {
         assertThat(response.status()).isEqualTo(200);
         assertThat(response.body())
                 .contains("/v1/symbols", "/v1/bars/{ticker}", "/v1/indicators/{ticker}", "/v1/levels/{ticker}",
-                        "/v1/export/bars.csv", "X-API-Key");
+                        "/v1/export/bars.csv", "/v1/splits/{ticker}", "X-API-Key", "If-None-Match");
     }
 
     @Test

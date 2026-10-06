@@ -2,9 +2,14 @@ package com.lokaz.marketdata.api;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 
 import org.jspecify.annotations.Nullable;
+
+import com.fasterxml.jackson.annotation.JsonInclude;
+
+import io.swagger.v3.oas.annotations.media.Schema;
 
 /** Response bodies. Prices are split-adjusted unless {@code adjustment} says "raw". */
 public final class Dtos {
@@ -13,14 +18,23 @@ public final class Dtos {
     }
 
     public record SymbolSummary(String ticker, @Nullable String name, String source, LocalDate firstBar,
-            LocalDate lastBar, BigDecimal lastClose) {
+            LocalDate lastBar, BigDecimal lastClose,
+            @Schema(description = "Alpaca feed of the latest bar (iex or sip); null for synthetic data")
+            @Nullable String feed,
+            @Schema(description = "When the last successful ingestion run that included this symbol finished; "
+                    + "null for synthetic data")
+            @Nullable OffsetDateTime lastIngestedAt) {
     }
 
-    public record SymbolList(List<SymbolSummary> symbols) {
+    /** @param nextAfter pass as {@code after} to get the next page; null on the last page */
+    public record SymbolList(List<SymbolSummary> symbols, @Nullable String nextAfter) {
     }
 
     public record Bar(LocalDate date, BigDecimal open, BigDecimal high, BigDecimal low, BigDecimal close,
-            long volume) {
+            long volume,
+            @Schema(description = "Alpaca feed the bar came from (iex or sip); omitted for synthetic bars and for "
+                    + "bars ingested before feeds were recorded")
+            @JsonInclude(JsonInclude.Include.NON_NULL) @Nullable String feed) {
     }
 
     /** @param nextAfter pass as {@code after} to get the next page; null on the last page */
@@ -54,5 +68,15 @@ public final class Dtos {
 
     public record Levels(String ticker, String source, LocalDate asOf, BigDecimal close, Pivots pivots,
             Range range20d, Range range50d, Range range52w) {
+    }
+
+    /**
+     * A stock split, in Alpaca's terms: a 4-for-1 split is oldRate 1, newRate 4; a 1-for-10 reverse split is
+     * oldRate 10, newRate 1. Split-adjusted prices before {@code exDate} are multiplied by oldRate / newRate.
+     */
+    public record Split(LocalDate exDate, BigDecimal oldRate, BigDecimal newRate) {
+    }
+
+    public record SplitList(String ticker, String source, List<Split> splits) {
     }
 }
