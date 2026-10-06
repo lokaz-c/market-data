@@ -38,9 +38,18 @@ management:
     health:
       probes:
         enabled: true
+      group:
+        # Readiness = startup finished (demo data seeded) and the database answers; the UI polls this.
+        # Liveness stays database-free so a host's health check never keeps a free database awake.
+        readiness:
+          include: readinessState,db
 
 springdoc:
+  # The API documentation is public on purpose.
+  api-docs:
+    enabled: true
   swagger-ui:
+    enabled: true
     path: /docs
 
 market-data:
@@ -56,10 +65,11 @@ market-data:
       capacity: 30
       requests-per-minute: 60
   demo:
-    seed-when-no-keys: ${DEMO_SEED:false}
+    # never | when-no-keys | always
+    seed: ${DEMO_SEED:never}
     symbols: ${DEMO_SYMBOLS:50}
     years: ${DEMO_YEARS:10}
-    seed: 0.42
+    random-seed: 0.42
   alpaca:
     base-url: ${ALPACA_DATA_URL:https://data.alpaca.markets}
     key-id: ${ALPACA_API_KEY_ID:}

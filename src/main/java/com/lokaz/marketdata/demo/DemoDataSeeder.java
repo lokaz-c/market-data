@@ -12,7 +12,10 @@ import org.springframework.stereotype.Component;
 
 import com.lokaz.marketdata.alpaca.AlpacaProperties;
 
-/** Seeds synthetic demo data at startup so `docker compose up` shows charts before any Alpaca keys exist. */
+/**
+ * Seeds synthetic demo data at startup (see {@link SyntheticDataProperties.SeedMode}). Runs before the app
+ * reports ready, so readiness stays down until the data is there.
+ */
 @Component
 @Profile("!backfill")
 public class DemoDataSeeder implements ApplicationRunner {
@@ -34,14 +37,14 @@ public class DemoDataSeeder implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        if (!properties.seedWhenNoKeys() || alpaca.hasCredentials() || generator.hasSyntheticData()) {
+        if (!properties.seed().shouldSeed(alpaca.hasCredentials(), generator.hasSyntheticData())) {
             return;
         }
         // End on the last weekday before today so the data looks current without claiming today's session.
         LocalDate end = LocalDate.now(clock).minusDays(1);
-        log.info("No Alpaca keys: generating SYNTHETIC demo data ({} symbols x {} years)", properties.symbols(),
-                properties.years());
-        var result = generator.generate(properties.symbols(), properties.years(), end, properties.seed());
+        log.info("Generating SYNTHETIC demo data ({} symbols x {} years, DEMO_SEED={})", properties.symbols(),
+                properties.years(), properties.seed());
+        var result = generator.generate(properties.symbols(), properties.years(), end, properties.randomSeed());
         log.info("Synthetic demo data ready: {}", result);
     }
 }

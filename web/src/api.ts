@@ -141,12 +141,12 @@ export function fetchLevels(ticker: string, fetchFn: typeof fetch = fetch): Prom
   return getJson<Levels>(`/v1/levels/${encodeURIComponent(ticker)}`, fetchFn);
 }
 
-/** True when the API answers its health check with status UP within the timeout. */
+/** True when the API is ready (startup finished, database reachable) within the timeout. */
 export async function checkHealth(timeoutMs = 5000, fetchFn: typeof fetch = fetch): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchFn(`${API_BASE}/actuator/health`, { signal: controller.signal, cache: 'no-store' });
+    const response = await fetchFn(`${API_BASE}/actuator/health/readiness`, { signal: controller.signal, cache: 'no-store' });
     if (!response.ok) return false;
     const body = (await response.json()) as { status?: string };
     return body.status === 'UP';

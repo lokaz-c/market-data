@@ -43,7 +43,7 @@ public class BackfillRunner implements ApplicationRunner {
         }
         var parsed = BackfillArguments.parse(args, LocalDate.now(clock), properties.symbols());
         IngestionResult result = ingestion.ingest(
-                new IngestionRequest(IngestionKind.BACKFILL, parsed.symbols(), parsed.from(), parsed.to()));
+                new IngestionRequest(parsed.kind(), parsed.symbols(), parsed.from(), parsed.to()));
         log.info("Backfill finished: {}", result);
         if (!result.succeeded()) {
             throw new IllegalStateException("Backfill run " + result.runId() + " failed: " + result.error());

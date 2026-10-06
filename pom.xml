@@ -111,6 +111,8 @@
 	</dependencies>
 
 	<build>
+		<!-- Fixed name so the Dockerfile and the ingestion workflow can refer to target/market-data.jar. -->
+		<finalName>market-data</finalName>
 		<plugins>
 			<plugin>
 				<groupId>org.springframework.boot</groupId>

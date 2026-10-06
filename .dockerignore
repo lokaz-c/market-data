@@ -1,0 +1,12 @@
+.git
+.github
+.idea
+.vscode
+target
+web/node_modules
+web/dist
+docs
+loadtest/results
+*.md
+.env
+.env.*

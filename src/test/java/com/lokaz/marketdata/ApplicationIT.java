@@ -23,4 +23,16 @@ class ApplicationIT extends IntegrationTest {
         assertThat(response.statusCode()).isEqualTo(200);
         assertThat(response.body()).contains("\"status\":\"UP\"");
     }
+
+    @Test
+    void livenessAndReadinessProbesAreUp() throws Exception {
+        var client = HttpClient.newHttpClient();
+        var readiness = client.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port
+                + "/actuator/health/readiness")).build(), HttpResponse.BodyHandlers.ofString());
+        var liveness = client.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port
+                + "/actuator/health/liveness")).build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(readiness.statusCode()).isEqualTo(200);
+        assertThat(liveness.statusCode()).isEqualTo(200);
+        assertThat(readiness.body()).contains("UP");
+    }
 }

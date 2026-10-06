@@ -1,5 +1,5 @@
 // Free hosts stop idle services. While the API boots (about a minute on the free tier, plus JVM start-up),
-// poll the health check and tell the user what is happening instead of showing a broken page.
+// poll the readiness check and tell the user what is happening instead of showing a broken page.
 
 export type ServerState =
   | { kind: 'checking' }

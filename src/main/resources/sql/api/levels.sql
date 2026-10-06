@@ -3,33 +3,36 @@
 --   P = (H + L + C) / 3,  R1 = 2P - L,  S1 = 2P - H,  R2 = P + (H - L),  S2 = P - (H - L),
 --   R3 = H + 2(P - L),    S3 = L - 2(H - P)
 WITH anchor AS (
-    SELECT max(ts) AS as_of,
-           (SELECT min(ts) FROM bars WHERE symbol_id = :symbolId) AS first_ts
+    SELECT max(ts) AS as_of
     FROM bars
     WHERE symbol_id = :symbolId AND ts <= :asOf
 ), recent AS (
-    SELECT a.ts, a.high, a.low, a.close,
-           row_number() OVER (ORDER BY a.ts DESC) AS days_back
-    FROM bars_split_adjusted a, anchor
-    WHERE a.symbol_id = :symbolId
-      AND a.ts <= anchor.as_of
-      AND a.ts >= anchor.as_of - INTERVAL '52 weeks'
+    -- The bounds are scalar subqueries, which PostgreSQL evaluates once (InitPlans) and can use as index
+    -- conditions on (symbol_id, ts). Joining to the anchor CTE instead made them a filter applied after
+    -- reading every bar of the symbol (see docs/explain.md). 364 days = 52 weeks, the same window as the
+    -- RANGE frame in indicators.sql.
+    SELECT ts, high, low, close,
+           row_number() OVER (ORDER BY ts DESC) AS days_back
+    FROM bars_split_adjusted
+    WHERE symbol_id = :symbolId
+      AND ts <= (SELECT as_of FROM anchor)
+      AND ts >= (SELECT as_of FROM anchor) - 364
 ), summary AS (
-    SELECT anchor.as_of,
-           anchor.first_ts,
-           max(r.high)  FILTER (WHERE r.days_back = 1)   AS h,
-           max(r.low)   FILTER (WHERE r.days_back = 1)   AS l,
-           max(r.close) FILTER (WHERE r.days_back = 1)   AS c,
-           count(*)     FILTER (WHERE r.days_back <= 20) AS n20,
-           max(r.high)  FILTER (WHERE r.days_back <= 20) AS high20,
-           min(r.low)   FILTER (WHERE r.days_back <= 20) AS low20,
-           count(*)     FILTER (WHERE r.days_back <= 50) AS n50,
-           max(r.high)  FILTER (WHERE r.days_back <= 50) AS high50,
-           min(r.low)   FILTER (WHERE r.days_back <= 50) AS low50,
-           max(r.high) AS high52w,
-           min(r.low)  AS low52w
-    FROM anchor JOIN recent r ON true
-    GROUP BY anchor.as_of, anchor.first_ts
+    SELECT (SELECT as_of FROM anchor)                                AS as_of,
+           (SELECT min(ts) FROM bars WHERE symbol_id = :symbolId)    AS first_ts,
+           max(high)  FILTER (WHERE days_back = 1)   AS h,
+           max(low)   FILTER (WHERE days_back = 1)   AS l,
+           max(close) FILTER (WHERE days_back = 1)   AS c,
+           count(*)   FILTER (WHERE days_back <= 20) AS n20,
+           max(high)  FILTER (WHERE days_back <= 20) AS high20,
+           min(low)   FILTER (WHERE days_back <= 20) AS low20,
+           count(*)   FILTER (WHERE days_back <= 50) AS n50,
+           max(high)  FILTER (WHERE days_back <= 50) AS high50,
+           min(low)   FILTER (WHERE days_back <= 50) AS low50,
+           max(high) AS high52w,
+           min(low)  AS low52w
+    FROM recent
+    HAVING count(*) > 0  -- no row (404) when there is no bar on or before :asOf
 ), pivot AS (
     SELECT *, (h + l + c) / 3 AS p FROM summary
 )
