@@ -58,7 +58,8 @@ keys the app generates synthetic demo data at startup: 50 symbols x 10 years. Wi
 make backfill FROM=2016-01-01 SYMBOLS=AAPL,MSFT,SPY
 ```
 
-For development: `./mvnw spring-boot:test-run` starts the API against a throwaway Testcontainers PostgreSQL. Then
+For development: `DEMO_SEED=when-no-keys ./mvnw spring-boot:test-run` starts the API with demo data against a
+throwaway Testcontainers PostgreSQL. Then
 run `npm run dev` in `web/`, which proxies `/v1` to it. Run tests with `make test`, which needs Docker for
 Testcontainers.
 
