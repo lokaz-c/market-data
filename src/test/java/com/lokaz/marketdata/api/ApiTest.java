@@ -9,6 +9,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -41,18 +42,16 @@ abstract class ApiTest extends IntegrationTest {
     }
 
     Response get(String path) {
-        return send(path, null);
+        return get(path, Map.of());
     }
 
     Response getWithKey(String path, String key) {
-        return send(path, key);
+        return get(path, Map.of(ApiAccessFilter.API_KEY_HEADER, key));
     }
 
-    private Response send(String path, String key) {
+    Response get(String path, Map<String, String> headers) {
         var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path)).GET();
-        if (key != null) {
-            request.header(ApiAccessFilter.API_KEY_HEADER, key);
-        }
+        headers.forEach(request::header);
         try {
             HttpResponse<String> response = HTTP.send(request.build(), HttpResponse.BodyHandlers.ofString());
             return new Response(response.statusCode(), response.headers(), response.body(), json);

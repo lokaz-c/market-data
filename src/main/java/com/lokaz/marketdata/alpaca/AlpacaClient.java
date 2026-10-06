@@ -72,6 +72,11 @@ public class AlpacaClient {
         }
     }
 
+    /** The feed every bars request asks for (iex or sip). */
+    public String feed() {
+        return props.feed();
+    }
+
     /** Collects all pages of daily bars into one map; meant for small requests and tests. */
     public Map<String, List<AlpacaBar>> fetchDailyBars(List<String> symbols, LocalDate start, LocalDate end,
             Adjustment adjustment) {

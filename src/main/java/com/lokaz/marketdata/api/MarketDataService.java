@@ -3,7 +3,10 @@ package com.lokaz.marketdata.api;
 import java.io.Writer;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
+import java.util.function.Function;
 
 import org.jspecify.annotations.Nullable;
 import org.springframework.stereotype.Service;
@@ -14,7 +17,9 @@ import com.lokaz.marketdata.api.Dtos.BarsPage;
 import com.lokaz.marketdata.api.Dtos.IndicatorRow;
 import com.lokaz.marketdata.api.Dtos.IndicatorsPage;
 import com.lokaz.marketdata.api.Dtos.Levels;
+import com.lokaz.marketdata.api.Dtos.SplitList;
 import com.lokaz.marketdata.api.Dtos.SymbolList;
+import com.lokaz.marketdata.api.Dtos.SymbolSummary;
 import com.lokaz.marketdata.ingestion.Tickers;
 
 /**
@@ -23,7 +28,7 @@ import com.lokaz.marketdata.ingestion.Tickers;
  * <p>Pagination is keyset on ts: a page asks for {@code limit + 1} rows starting at its lower bound; if the
  * extra row comes back, the response carries {@code nextAfter} = the last returned date, and the next request
  * starts the day after it. Unlike OFFSET this costs the same for page 1 and page 50, and rows inserted by the
- * daily job cannot shift pages under a client.
+ * daily job cannot shift pages under a client. /v1/symbols pages the same way on the ticker.
  */
 @Service
 public class MarketDataService {
@@ -40,20 +45,50 @@ public class MarketDataService {
         this.readOnly.setReadOnly(true);
     }
 
-    public SymbolList symbols(@Nullable String query, int limit, List<String> sources) {
-        String prefix = query == null ? "" : query.strip().toUpperCase(java.util.Locale.ROOT);
-        return new SymbolList(repository.listSymbols(prefix, sources, limit));
+    public SymbolList symbols(@Nullable String query, @Nullable String after, int limit, List<String> sources) {
+        Page<SymbolSummary, String> page = Page.of(
+                repository.listSymbols(upper(query), upper(after), sources, limit + 1), limit, SymbolSummary::ticker);
+        return new SymbolList(page.items(), page.nextAfter());
     }
 
-    public BarsPage bars(String rawTicker, @Nullable LocalDate from, @Nullable LocalDate to, @Nullable LocalDate after,
-            int limit, boolean splitAdjusted, List<String> sources) {
+    public BarsPage bars(SymbolRef symbol, BarsQuery query) {
+        if (query.last() != null) {
+            return latestBars(symbol, query, query.last());
+        }
+        Window window = window(symbol, query.from(), query.to(), query.after());
+        List<Bar> rows = window.isEmpty() ? List.of() : repository.barsPage(symbol.id(), query.splitAdjusted(),
+                window.lower(), window.to(), query.limit() + 1);
+        Page<Bar, LocalDate> page = Page.of(rows, query.limit(), Bar::date);
+        return new BarsPage(symbol.ticker(), symbol.source(), query.adjustment(), window.from(), window.to(),
+                page.items(), page.nextAfter());
+    }
+
+    /**
+     * The {@code last} latest bars on or before {@code to}: one page, oldest first, with no cursor. {@code from}
+     * in the response is the first bar returned.
+     */
+    private BarsPage latestBars(SymbolRef symbol, BarsQuery query, int last) {
+        LocalDate to = query.to() != null ? query.to() : repository.latestBarDate(symbol.id()).orElse(LocalDate.now());
+        List<Bar> rows = repository.latestBars(symbol.id(), query.splitAdjusted(), to, last);
+        LocalDate from = rows.isEmpty() ? to : rows.getFirst().date();
+        return new BarsPage(symbol.ticker(), symbol.source(), query.adjustment(), from, to, rows, null);
+    }
+
+    /**
+     * Weak ETag for a bars response: a hash of the symbol's data version and the request (the record's toString
+     * lists every parameter). The version changes whenever the symbol's bars or splits change, so a 304 never
+     * hides new data, and checking it reads one symbols row instead of any bars. Weak, because gzip and identity
+     * encodings of the same JSON are equivalent, not byte-identical.
+     */
+    static String barsEtag(SymbolRef symbol, BarsQuery query) {
+        String key = String.join("|", "bars-v1", Integer.toString(symbol.id()),
+                symbol.dataChangedAt().toInstant().toString(), query.toString());
+        return "W/\"" + HexFormat.of().formatHex(ApiKeys.sha256(key), 0, 16) + "\"";
+    }
+
+    public SplitList splits(String rawTicker, List<String> sources) {
         SymbolRef symbol = resolve(rawTicker, sources);
-        Window window = window(symbol, from, to, after);
-        List<Bar> rows = window.isEmpty() ? List.of()
-                : repository.barsPage(symbol.id(), splitAdjusted, window.lower(), window.to(), limit + 1);
-        Page<Bar> page = Page.of(rows, limit, Bar::date);
-        return new BarsPage(symbol.ticker(), symbol.source(), splitAdjusted ? "split" : "raw", window.from(),
-                window.to(), page.items(), page.nextAfter());
+        return new SplitList(symbol.ticker(), symbol.source(), repository.splits(symbol.id()));
     }
 
     public IndicatorsPage indicators(String rawTicker, @Nullable LocalDate from, @Nullable LocalDate to,
@@ -62,7 +97,7 @@ public class MarketDataService {
         Window window = window(symbol, from, to, after);
         List<IndicatorRow> rows = window.isEmpty() ? List.of()
                 : repository.indicatorsPage(symbol.id(), window.lower(), window.to(), limit + 1);
-        Page<IndicatorRow> page = Page.of(rows, limit, IndicatorRow::date);
+        Page<IndicatorRow, LocalDate> page = Page.of(rows, limit, IndicatorRow::date);
         return new IndicatorsPage(symbol.ticker(), symbol.source(), window.from(), window.to(), page.items(),
                 page.nextAfter());
     }
@@ -93,7 +128,7 @@ public class MarketDataService {
         });
     }
 
-    private SymbolRef resolve(String rawTicker, List<String> sources) {
+    SymbolRef resolve(String rawTicker, List<String> sources) {
         String ticker;
         try {
             ticker = Tickers.normalize(rawTicker);
@@ -122,13 +157,18 @@ public class MarketDataService {
         }
     }
 
-    private record Page<T>(List<T> items, @Nullable LocalDate nextAfter) {
-        static <T> Page<T> of(List<T> rows, int limit, java.util.function.Function<T, LocalDate> date) {
+    private static String upper(@Nullable String value) {
+        return value == null ? "" : value.strip().toUpperCase(Locale.ROOT);
+    }
+
+    /** Keyset page: {@code rows} holds up to limit + 1 rows; the extra one only says that another page exists. */
+    private record Page<T, K>(List<T> items, @Nullable K nextAfter) {
+        static <T, K> Page<T, K> of(List<T> rows, int limit, Function<T, K> key) {
             if (rows.size() <= limit) {
                 return new Page<>(rows, null);
             }
             List<T> items = rows.subList(0, limit);
-            return new Page<>(List.copyOf(items), date.apply(items.getLast()));
+            return new Page<>(List.copyOf(items), key.apply(items.getLast()));
         }
     }
 }

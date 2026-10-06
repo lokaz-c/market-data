@@ -106,6 +106,61 @@ class IngestionServiceIT extends IntegrationTest {
     }
 
     @Test
+    void recordsTheFeedOnEachBarAndTheRunOnEachSymbol() {
+        stubBars(page(AAPL_3_DAYS, MSFT_3_DAYS, null));
+
+        IngestionResult result = ingest();
+
+        assertThat(jdbc.sql("SELECT DISTINCT feed FROM bars").query(String.class).list()).containsExactly("iex");
+        List<Map<String, Object>> symbols = jdbc.sql("""
+                SELECT s.ticker, s.last_ingestion_run_id, s.last_ingested_at = r.finished_at AS at_run_finish
+                FROM symbols s JOIN ingestion_runs r ON r.id = s.last_ingestion_run_id
+                ORDER BY s.ticker""").query().listOfRows();
+        assertThat(symbols).extracting(r -> r.get("ticker")).containsExactly("AAPL", "MSFT");
+        assertThat(symbols).extracting(r -> r.get("last_ingestion_run_id")).containsOnly(result.runId());
+        assertThat(symbols).extracting(r -> r.get("at_run_finish")).containsOnly(true);
+    }
+
+    @Test
+    void aFailedRunDoesNotCountAsTheLastIngestion() {
+        stubBars(page(AAPL_3_DAYS, MSFT_3_DAYS, null));
+        long succeeded = ingest().runId();
+        alpaca.resetMappings();
+        noSplitsByDefault();
+        alpaca.stubFor(get(urlPathEqualTo("/v2/stocks/bars")).willReturn(aResponse().withStatus(503)));
+
+        assertThat(ingest().succeeded()).isFalse();
+
+        assertThat(jdbc.sql("SELECT DISTINCT last_ingestion_run_id FROM symbols").query(Long.class).list())
+                .containsExactly(succeeded);
+    }
+
+    @Test
+    void aSymbolsDataVersionMovesOnlyWhenItsBarsChange() {
+        stubBars(page(AAPL_3_DAYS, MSFT_3_DAYS, null));
+        ingest();
+        Map<String, String> first = dataVersions();
+
+        ingest();
+        assertThat(dataVersions()).as("an identical re-run").isEqualTo(first);
+
+        alpaca.resetMappings();
+        noSplitsByDefault();
+        stubBars(page(AAPL_3_DAYS.replace("\"c\":184.25", "\"c\":184.30"), MSFT_3_DAYS, null));
+        ingest();
+        Map<String, String> corrected = dataVersions();
+        assertThat(corrected.get("AAPL")).isNotEqualTo(first.get("AAPL"));
+        assertThat(corrected.get("MSFT")).isEqualTo(first.get("MSFT"));
+    }
+
+    private Map<String, String> dataVersions() {
+        var versions = new java.util.HashMap<String, String>();
+        jdbc.sql("SELECT ticker, data_changed_at::text AS v FROM symbols").query()
+                .listOfRows().forEach(r -> versions.put((String) r.get("ticker"), (String) r.get("v")));
+        return versions;
+    }
+
+    @Test
     void invalidBarsAreSkippedAndCountedWithoutFailingTheRun() {
         String withBadBar = String.join(",",
                 bar("2024-01-02", "187.15", "188.44", "183.89", "185.64", 82488700),

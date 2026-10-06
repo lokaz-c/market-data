@@ -93,17 +93,19 @@ public class IngestionService {
     }
 
     private void ingestBars(IngestionRequest request, Map<String, Integer> symbolIds, RunCounters counters) {
+        // Alpaca's bars response does not name the feed; it is the one the client asked for.
+        String feed = alpaca.feed();
         alpaca.forEachDailyBarsPage(request.symbols(), request.from(), request.to(), Adjustment.RAW,
                 (n, wait, cause) -> counters.httpRetries++,
                 page -> {
-                    List<BarRow> rows = toValidRows(page, symbolIds, counters);
+                    List<BarRow> rows = toValidRows(page, symbolIds, feed, counters);
                     // One transaction per page: a failure later in a backfill keeps the pages already written.
                     counters.barsUpserted += transactions.execute(status -> repository.upsertBars(rows));
                 });
     }
 
     private static List<BarRow> toValidRows(Map<String, List<AlpacaBar>> page, Map<String, Integer> symbolIds,
-            RunCounters counters) {
+            String feed, RunCounters counters) {
         var rows = new ArrayList<BarRow>();
         page.forEach((symbol, bars) -> {
             Integer symbolId = symbolIds.get(symbol);
@@ -115,7 +117,7 @@ public class IngestionService {
                     continue;
                 }
                 var row = new BarRow(symbolId, bar.sessionDate(), bar.open(), bar.high(), bar.low(), bar.close(),
-                        bar.volume(), bar.tradeCount(), bar.vwap());
+                        bar.volume(), bar.tradeCount(), bar.vwap(), feed);
                 var violation = row.violation();
                 if (violation.isPresent()) {
                     counters.barsRejected++;

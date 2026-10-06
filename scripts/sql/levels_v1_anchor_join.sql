@@ -1,6 +1,9 @@
--- FIRST VERSION of api/levels.sql, kept only so scripts/explain.py can compare it with the current one.
--- The date bounds come from a join to the anchor CTE, so PostgreSQL applies them as a filter after reading
--- every bar of the symbol instead of using them in the (symbol_id, ts) index scan.
+-- FIRST VERSION of api/levels.sql, kept only so scripts/explain.py can compare it with the current one. It runs
+-- against bars_split_adjusted_v2, the view as it was when this query was replaced (scripts/explain.py creates it).
+-- The date bounds come from a join to the anchor CTE. The V2 view has a WITH clause, so PostgreSQL does not
+-- flatten it and cannot push a join condition into it: the bounds became a filter applied after reading every bar
+-- of the symbol instead of conditions on the (symbol_id, ts) index scan. Scalar subqueries (api/levels.sql) are
+-- evaluated once as InitPlans and pushed in like constants.
 
 -- Price levels as of the last session on or before :asOf, on split-adjusted prices.
 -- Pivots are classic floor pivots computed from that session, for use in the next session:
@@ -14,7 +17,7 @@ WITH anchor AS (
 ), recent AS (
     SELECT a.ts, a.high, a.low, a.close,
            row_number() OVER (ORDER BY a.ts DESC) AS days_back
-    FROM bars_split_adjusted a, anchor
+    FROM bars_split_adjusted_v2 a, anchor
     WHERE a.symbol_id = :symbolId
       AND a.ts <= anchor.as_of
       AND a.ts >= anchor.as_of - INTERVAL '52 weeks'

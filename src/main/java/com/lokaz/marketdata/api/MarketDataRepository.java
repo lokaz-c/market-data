@@ -6,6 +6,7 @@ import java.io.Writer;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -17,6 +18,7 @@ import com.lokaz.marketdata.api.Dtos.IndicatorRow;
 import com.lokaz.marketdata.api.Dtos.Levels;
 import com.lokaz.marketdata.api.Dtos.Pivots;
 import com.lokaz.marketdata.api.Dtos.Range;
+import com.lokaz.marketdata.api.Dtos.Split;
 import com.lokaz.marketdata.api.Dtos.SymbolSummary;
 import com.lokaz.marketdata.sql.SqlFiles;
 
@@ -28,6 +30,9 @@ public class MarketDataRepository {
     private static final String LIST_SYMBOLS = SqlFiles.load("api/list_symbols.sql");
     private static final String BARS_PAGE_SPLIT = SqlFiles.load("api/bars_page_split.sql");
     private static final String BARS_PAGE_RAW = SqlFiles.load("api/bars_page_raw.sql");
+    private static final String BARS_LATEST_SPLIT = SqlFiles.load("api/bars_latest_split.sql");
+    private static final String BARS_LATEST_RAW = SqlFiles.load("api/bars_latest_raw.sql");
+    private static final String SPLITS = SqlFiles.load("api/splits.sql");
     private static final String INDICATORS = SqlFiles.load("api/indicators.sql");
     private static final String LEVELS = SqlFiles.load("api/levels.sql");
     private static final String LATEST_BAR_DATE = SqlFiles.load("api/latest_bar_date.sql");
@@ -49,14 +54,17 @@ public class MarketDataRepository {
                 .optional();
     }
 
-    List<SymbolSummary> listSymbols(String prefix, List<String> sources, int limit) {
+    /** @param after the previous page's last ticker, or "" for the first page */
+    List<SymbolSummary> listSymbols(String prefix, String after, List<String> sources, int limit) {
         return jdbc.sql(LIST_SYMBOLS)
                 .param("prefix", prefix)
+                .param("after", after)
                 .param("sources", sources.toArray(String[]::new))
                 .param("limit", limit)
                 .query((rs, n) -> new SymbolSummary(rs.getString("ticker"), rs.getString("name"),
                         rs.getString("source"), rs.getObject("first_bar", LocalDate.class),
-                        rs.getObject("last_bar", LocalDate.class), Decimals.get(rs, "last_close")))
+                        rs.getObject("last_bar", LocalDate.class), Decimals.get(rs, "last_close"),
+                        rs.getString("feed"), rs.getObject("last_ingested_at", OffsetDateTime.class)))
                 .list();
     }
 
@@ -71,6 +79,24 @@ public class MarketDataRepository {
                 .param("toDate", to)
                 .param("limit", limit)
                 .query((rs, n) -> bar(rs))
+                .list();
+    }
+
+    /** The {@code limit} latest bars on or before {@code to}, oldest first. */
+    List<Bar> latestBars(int symbolId, boolean splitAdjusted, LocalDate to, int limit) {
+        return jdbc.sql(splitAdjusted ? BARS_LATEST_SPLIT : BARS_LATEST_RAW)
+                .param("symbolId", symbolId)
+                .param("toDate", to)
+                .param("limit", limit)
+                .query((rs, n) -> bar(rs))
+                .list();
+    }
+
+    List<Split> splits(int symbolId) {
+        return jdbc.sql(SPLITS)
+                .param("symbolId", symbolId)
+                .query((rs, n) -> new Split(rs.getObject("ex_date", LocalDate.class), Decimals.get(rs, "old_rate"),
+                        Decimals.get(rs, "new_rate")))
                 .list();
     }
 
@@ -104,7 +130,11 @@ public class MarketDataRepository {
                 .optional();
     }
 
-    /** Streams one symbol's bars as CSV lines; uses a cursor (fetch size) so memory stays flat. */
+    /**
+     * Streams one symbol's bars as CSV lines (see ExportController for the header); uses a cursor (fetch size) so
+     * memory stays flat. CHECK constraints limit tickers, sources and feeds to letters, digits and dots, so no
+     * field needs quoting.
+     */
     void exportCsv(SymbolRef symbol, boolean splitAdjusted, LocalDate from, LocalDate to, Writer out) {
         jdbc.sql(splitAdjusted ? EXPORT_SPLIT : EXPORT_RAW)
                 .withFetchSize(EXPORT_FETCH_SIZE)
@@ -116,7 +146,8 @@ public class MarketDataRepository {
                     try {
                         out.write(symbol.ticker() + "," + bar.date() + "," + bar.open().toPlainString() + ","
                                 + bar.high().toPlainString() + "," + bar.low().toPlainString() + ","
-                                + bar.close().toPlainString() + "," + bar.volume() + "\n");
+                                + bar.close().toPlainString() + "," + bar.volume() + "," + symbol.source() + ","
+                                + (bar.feed() == null ? "" : bar.feed()) + "\n");
                     } catch (IOException e) {
                         throw new UncheckedIOException(e);
                     }
@@ -125,6 +156,6 @@ public class MarketDataRepository {
 
     private static Bar bar(ResultSet rs) throws SQLException {
         return new Bar(rs.getObject("ts", LocalDate.class), Decimals.get(rs, "open"), Decimals.get(rs, "high"),
-                Decimals.get(rs, "low"), Decimals.get(rs, "close"), rs.getLong("volume"));
+                Decimals.get(rs, "low"), Decimals.get(rs, "close"), rs.getLong("volume"), rs.getString("feed"));
     }
 }

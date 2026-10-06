@@ -19,18 +19,22 @@ class ExportIT extends ApiTest {
     @Test
     void streamsCsvForSeveralSymbolsInRequestOrderIncludingNonPublicSources() {
         insertBars(insertSymbol("SYNA", "synthetic"), TestSeries.weekdays(LocalDate.of(2024, 1, 2), 3));
-        insertBars(insertSymbol("AAPL", "alpaca"), TestSeries.weekdays(LocalDate.of(2024, 1, 2), 2));
+        int aapl = insertSymbol("AAPL", "alpaca");
+        insertBars(aapl, TestSeries.weekdays(LocalDate.of(2024, 1, 2), 2));
+        jdbc.sql("UPDATE bars SET feed = 'iex' WHERE symbol_id = :id").param("id", aapl).update();
 
         Response response = getWithKey("/v1/export/bars.csv?symbols=aapl,SYNA&from=2024-01-01&to=2024-12-31", API_KEY);
 
         assertThat(response.status()).isEqualTo(200);
         assertThat(response.header("Content-Type")).startsWith("text/csv");
         List<String> lines = response.body().lines().toList();
-        assertThat(lines.getFirst()).isEqualTo("ticker,date,open,high,low,close,volume");
+        assertThat(lines.getFirst()).isEqualTo("ticker,date,open,high,low,close,volume,source,feed");
         assertThat(lines).hasSize(1 + 2 + 3);
-        assertThat(lines.get(1)).startsWith("AAPL,2024-01-02,");
-        assertThat(lines.get(3)).startsWith("SYNA,2024-01-02,");
+        assertThat(lines.get(1)).startsWith("AAPL,2024-01-02,").endsWith(",alpaca,iex");
+        assertThat(lines.get(3)).startsWith("SYNA,2024-01-02,").endsWith(",synthetic,");
         assertThat(lines.get(5)).startsWith("SYNA,2024-01-04,");
+        // Every row has the header's nine fields, including an empty feed.
+        assertThat(lines).allSatisfy(line -> assertThat(line.split(",", -1)).hasSize(9));
     }
 
     @Test
