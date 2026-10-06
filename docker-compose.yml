@@ -36,6 +36,7 @@ services:
       DEMO_SEED: ${DEMO_SEED:-when-no-keys}
       DEMO_SYMBOLS: ${DEMO_SYMBOLS:-50}
       DEMO_YEARS: ${DEMO_YEARS:-10}
+      API_KEYS: ${API_KEYS:-}
       API_KEY_SHA256: ${API_KEY_SHA256:-}
       PUBLIC_DATA_SOURCES: ${PUBLIC_DATA_SOURCES:-synthetic}
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}

@@ -41,7 +41,7 @@ flowchart LR
     tables --> view
     view -- "SQL indicators, levels" --> api
     api --> ui
-    api -- "X-API-Key" --> clients["Backtester (CSV export),<br/>TradeDesk (/v1/levels)"]
+    api -- "X-API-Key (scoped)" --> clients["Backtester (bars, CSV export),<br/>TradeDesk (/v1/levels, /v1/bars)"]
 ```
 
 ## Run it
@@ -73,7 +73,7 @@ Testcontainers.
 | `GET /v1/splits/{ticker}` | Splits, oldest first, as Alpaca's old and new share counts |
 | `GET /v1/indicators/{ticker}?from=&to=&after=&limit=` | Per day: SMA 20/50/200, 20-day volatility, ATR 14, 52-week high/low, pivot, R1, S1 |
 | `GET /v1/levels/{ticker}?asOf=` | Pivots (P, R1-R3, S1-S3) from the last session, 20/50-day highs/lows, 52-week range |
-| `GET /v1/export/bars.csv?symbols=&from=&to=` | Streaming CSV for up to 100 symbols, with `source` and `feed` columns; needs `X-API-Key` |
+| `GET /v1/export/bars.csv?symbols=&from=&to=` | Streaming CSV for up to 100 symbols, with `source` and `feed` columns; needs a key with the `export` scope |
 | `GET /actuator/health/{liveness,readiness}` | Liveness (no database) for the host; readiness (startup done, database up) for the UI |
 
 ```bash
@@ -103,10 +103,42 @@ curl -s 'localhost:8080/v1/bars/NOPE'   # 404, application/problem+json
   `lastIngestedAt` is a column on `symbols`, written by the same statement that closes the run. Reading it from
   `ingestion_runs` instead would mean finding the latest successful run that lists the ticker, which reads every
   run that lists it: for a daily job, every run.
-- **Rate limiting:** public `/v1` requests get a token bucket per client IP, with a burst of 30 and then 60 per
-  minute. Over the limit: 429 with `Retry-After`. Requests with a valid API key are not limited.
-- **API keys:** the service stores only SHA-256 digests (`API_KEY_SHA256`) and compares them in constant time. A
-  key unlocks bulk export and non-public data sources.
+- **Rate limiting.** `/v1` requests get a token bucket per client IP: a burst of 30, then 60 per minute. Requests
+  with a key that has the `rate-limit` scope are not limited. Limited responses carry the two fields of the current
+  IETF draft, [draft-ietf-httpapi-ratelimit-headers-11](https://datatracker.ietf.org/doc/draft-ietf-httpapi-ratelimit-headers/)
+  (May 2026), next to the older `X-RateLimit-Remaining`:
+
+  ```
+  RateLimit-Policy: "per-ip";q=30;w=30
+  RateLimit: "per-ip";r=29;t=1
+  ```
+
+  The policy describes the bucket: `q` is its size and `w` the seconds it takes to refill from empty, so `q/w` is
+  the sustained rate. `r` is the number of requests left and `t` the seconds until the next one comes back: the
+  draft's "time within which the client can use no more than the available quota". Over the limit the response is
+  a 429 with `Retry-After`, and `RateLimit` has `r=0` and `t` equal to `Retry-After`, as the draft asks. The draft
+  may still change these fields; `X-RateLimit-Remaining` and `Retry-After` stay as they are.
+- **API keys and scopes.** The service stores only SHA-256 digests of keys and compares them in constant time. A
+  valid key also makes responses `Cache-Control: private`. Each key has one or more scopes:
+
+  | Scope | What it adds |
+  |---|---|
+  | `rate-limit` | Not rate-limited |
+  | `alpaca-data` | Every data source, including Alpaca's. Without it, only `PUBLIC_DATA_SOURCES` (default `synthetic`); other symbols are a 404 |
+  | `export` | `/v1/export/bars.csv`, of the symbols the key can see. Without a key: 401; with a key that lacks the scope: 403 |
+
+  Keys are configured in `API_KEYS` as `<sha256>:<scope>[,<scope>]` entries separated by semicolons. A malformed
+  entry, an unknown scope or a digest listed twice stops the service at startup.
+
+  ```bash
+  KEY=$(openssl rand -hex 32); printf %s "$KEY" | shasum -a 256   # the client gets $KEY, the service the digest
+  API_KEYS='<tradedesk digest>:rate-limit;<quant digest>:rate-limit,alpaca-data,export'
+  ```
+
+  **Migrating from `API_KEY_SHA256`.** Digests in `API_KEY_SHA256` keep working and keep every scope, which is
+  what a key meant before scopes, so nothing changes until you move a key. To limit a key, move its digest from
+  `API_KEY_SHA256` to `API_KEYS` with the scopes it needs, in one deploy; a digest in both settings is a startup
+  error. When `API_KEY_SHA256` is empty, remove it.
 
 ## The SQL
 
@@ -263,7 +295,7 @@ database. Two runs per variant:
 
 ## Tests
 
-`./mvnw verify` runs 48 unit tests and 68 integration tests. The integration tests run against a real PostgreSQL 18
+`./mvnw verify` runs 60 unit tests and 75 integration tests. The integration tests run against a real PostgreSQL 18
 (Testcontainers), with WireMock standing in for Alpaca. One case is skipped until real Alpaca recordings exist (see
 TODO below). `web/` has 16 Vitest tests. CI runs everything, plus lint, typecheck and a production build, on every
 push and pull request.
@@ -274,6 +306,7 @@ push and pull request.
 | Alpaca client (`AlpacaClientTest`, `RetrierTest`) | Query parameters and keys; `next_page_token` pagination with an encoded token; symbol chunking; New York session dates in summer and winter; waiting for `X-RateLimit-Reset`; giving up; no retry on 403; full-jitter bounds |
 | SQL (`SplitAdjustedViewIT`, `IndicatorsIT`, `SchemaIT`) | View vs Alpaca-shaped split-adjusted fixtures; compounding, reverse and offsetting splits; every indicator vs a Java reference; hand-computed pivots; CHECK constraints; data-version triggers: one row version per transaction, no change for a statement that writes nothing, deletes count |
 | API (`BarsApiIT`, `ConditionalBarsIT`, `SymbolsApiIT`, `SplitsApiIT`, `FreshnessApiIT`, `ExportIT`, `RateLimitFilterTest`, `OpenApiIT`) | Keyset pages cover a range once and in order, for bars and for symbols; `last=N` with and without `to`, raw and adjusted, and its invalid combinations; 304 for a matching `If-None-Match`, a new ETag after a new bar or split, none for errors; splits; feed and last ingestion after real ingestion runs; problem-detail bodies; parameter validation; synthetic vs Alpaca visibility with and without a key; CSV export with `source` and `feed`; 429 with `Retry-After` |
+| Keys and rate limits (`ApiKeysTest`, `ScopesIT`, `RateLimitFilterTest`, `RateLimitIT`) | Each scope unlocks one thing; `API_KEY_SHA256` keys keep every scope; malformed `API_KEYS` entries, unknown scopes and duplicate digests stop startup; `RateLimit` and `RateLimit-Policy` values, with `t` equal to `Retry-After` on a 429; the `rate-limit` scope lifts the limit while other keys share the IP's bucket; CORS exposes the rate-limit headers and `ETag` |
 | Synthetic data (`SyntheticDataIT`) | Expected row count, all rows labelled synthetic, same seed gives same data, no jump in the adjusted series at synthetic splits |
 
 ## Why these technologies
@@ -322,10 +355,11 @@ I checked these against Alpaca's documentation and legal pages in October 2026.
   say Content is "provided exclusively for personal and noncommercial access and use" and may not be "publicly
   displayed ... without Alpaca's express prior written consent". Making it available to others through an
   application requires 30 days' written notice.
-- **How the service complies.** Without an API key, the public endpoints only serve sources listed in
-  `PUBLIC_DATA_SOURCES`, which defaults to `synthetic`. Alpaca-sourced symbols return the same 404 as unknown ones.
-  Public responses are limited to what the chart needs (at most 1,000 rows per page) and are rate-limited. Bulk
-  export needs a key. If Alpaca gives consent, set `PUBLIC_DATA_SOURCES=alpaca,synthetic` and add the IEX
+- **How the service complies.** Without a key that has the `alpaca-data` scope, the endpoints only serve sources
+  listed in `PUBLIC_DATA_SOURCES`, which defaults to `synthetic`. Alpaca-sourced symbols return the same 404 as
+  unknown ones. So a server-side client such as TradeDesk can have a key that lifts the rate limit and still sees
+  only synthetic data. Public responses are limited to what the chart needs (at most 1,000 rows per page) and are
+  rate-limited. Bulk export needs a key with the `export` scope. If Alpaca gives consent, set `PUBLIC_DATA_SOURCES=alpaca,synthetic` and add the IEX
   attribution IEX's policy asks for.
 
 The chart library's licence requires the attribution in the page footer: "TradingView Lightweight Charts™,
@@ -346,8 +380,8 @@ Steps:
    - `SPRING_DATASOURCE_USERNAME`
    - `SPRING_DATASOURCE_PASSWORD`
 2. **Render.** Sign up at https://dashboard.render.com with GitHub, then New > Blueprint > this repository, with
-   Blueprint path `deploy/render.yaml`. Enter the three database values when prompted. Leave `API_KEY_SHA256` empty,
-   or set the digest of a key for TradeDesk and the backtester.
+   Blueprint path `deploy/render.yaml`. Enter the three database values when prompted. Leave `API_KEYS` empty, or
+   add an entry per client: `rate-limit` for TradeDesk, `rate-limit,alpaca-data,export` for the backtester.
 3. **Ingestion (once Alpaca keys exist).** Add the repository secrets `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY`
    and the three `SPRING_DATASOURCE_*` values. Set the repository variable `INGEST_ENABLED=true` (and optionally
    `INGEST_SYMBOLS`). [`ingest.yml`](.github/workflows/ingest.yml) then runs the daily ingestion against Neon after
@@ -369,6 +403,8 @@ Free-tier behaviour to expect:
 - **Indicator choices.** ATR uses a simple mean rather than Wilder's smoothing. Pivots are classic floor pivots only.
 - **Synthetic calendar.** Synthetic data has every weekday as a session; there is no holiday calendar.
 - **One instance.** The rate limiter keeps state in memory, which is correct for one instance only.
+- **Draft headers.** `RateLimit` and `RateLimit-Policy` follow draft -11 of an IETF draft; a later version may
+  change them.
 - **Cold starts.** A 0.1 CPU free instance needs one to two minutes for the JVM to start, measured locally (see
   above), plus the host's spin-up.
 - **Local measurements.** Performance numbers come from a laptop with synthetic data, with client and server on the
