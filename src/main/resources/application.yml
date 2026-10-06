@@ -30,6 +30,10 @@ management:
     web:
       exposure:
         include: health,info
+      # The chart explorer polls /actuator/health; allow it cross-origin when the UI is hosted elsewhere.
+      cors:
+        allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+        allowed-methods: GET
   endpoint:
     health:
       probes:
