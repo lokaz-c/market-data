@@ -1,0 +1,16 @@
+-- Idempotent upsert of one raw daily bar. The WHERE clause skips the write when nothing changed, so
+-- re-ingesting the same data reports 0 affected rows and creates no dead tuples.
+INSERT INTO bars AS b (symbol_id, ts, open, high, low, close, volume, trade_count, vwap)
+VALUES (:symbolId, :ts, :open, :high, :low, :close, :volume, :tradeCount, :vwap)
+ON CONFLICT (symbol_id, ts) DO UPDATE
+SET open        = excluded.open,
+    high        = excluded.high,
+    low         = excluded.low,
+    close       = excluded.close,
+    volume      = excluded.volume,
+    trade_count = excluded.trade_count,
+    vwap        = excluded.vwap,
+    ingested_at = now()
+WHERE (b.open, b.high, b.low, b.close, b.volume, b.trade_count, b.vwap)
+      IS DISTINCT FROM
+      (excluded.open, excluded.high, excluded.low, excluded.close, excluded.volume, excluded.trade_count, excluded.vwap)

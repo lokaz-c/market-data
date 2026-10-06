@@ -1,0 +1,40 @@
+{
+  "corporate_actions": {
+    "forward_splits": [
+      {
+        "cusip": "037833100",
+        "ex_date": "2020-08-31",
+        "id": "00000000-0000-4000-8000-000000000001",
+        "new_rate": 4,
+        "old_rate": 1,
+        "payable_date": "2020-08-28",
+        "process_date": "2020-08-31",
+        "record_date": "2020-08-24",
+        "symbol": "AAPL"
+      },
+      {
+        "cusip": "88160R101",
+        "ex_date": "2020-08-31",
+        "id": "00000000-0000-4000-8000-000000000002",
+        "new_rate": 5,
+        "old_rate": 1,
+        "payable_date": "2020-08-28",
+        "process_date": "2020-08-31",
+        "record_date": "2020-08-21",
+        "symbol": "TSLA"
+      },
+      {
+        "cusip": "88160R101",
+        "ex_date": "2022-08-25",
+        "id": "00000000-0000-4000-8000-000000000003",
+        "new_rate": 3,
+        "old_rate": 1,
+        "payable_date": "2022-08-24",
+        "process_date": "2022-08-25",
+        "record_date": "2022-08-17",
+        "symbol": "TSLA"
+      }
+    ]
+  },
+  "next_page_token": null
+}

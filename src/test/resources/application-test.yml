@@ -1,0 +1,12 @@
+market-data:
+  alpaca:
+    key-id: test-key-id
+    secret-key: test-secret-key
+    retry:
+      max-attempts: 3
+      initial-delay: 1ms
+      max-delay: 20ms
+  ingestion:
+    symbols: AAPL,TSLA
+    schedule:
+      enabled: false

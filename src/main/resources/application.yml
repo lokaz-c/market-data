@@ -1,0 +1,53 @@
+spring:
+  application:
+    name: market-data
+  datasource:
+    # Override with SPRING_DATASOURCE_URL / _USERNAME / _PASSWORD.
+    url: jdbc:postgresql://localhost:5432/marketdata
+    username: marketdata
+    password: marketdata
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+  threads:
+    virtual:
+      # Java 24+ no longer pins virtual threads inside synchronized blocks (JEP 491), so blocking JDBC
+      # calls are fine on virtual threads. The connection pool stays the real concurrency limit.
+      enabled: true
+
+server:
+  port: ${PORT:8080}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+market-data:
+  alpaca:
+    base-url: ${ALPACA_DATA_URL:https://data.alpaca.markets}
+    key-id: ${ALPACA_API_KEY_ID:}
+    secret-key: ${ALPACA_API_SECRET_KEY:}
+    feed: ${ALPACA_FEED:iex}
+    page-limit: 10000
+    symbols-per-request: 100
+    connect-timeout: 5s
+    read-timeout: 30s
+    retry:
+      max-attempts: 5
+      initial-delay: 500ms
+      # Alpaca's free plan allows 200 calls/min; a 429 waits for X-RateLimit-Reset, capped here.
+      max-delay: 60s
+  ingestion:
+    symbols: ${INGEST_SYMBOLS:SPY,QQQ,IWM,DIA,AAPL,MSFT,NVDA,AMZN,GOOGL,META,TSLA,AVGO,JPM,V,MA,UNH,XOM,JNJ,WMT,PG,HD,COST,NFLX,AMD,CRM,ORCL,BAC,KO,PEP,DIS}
+    schedule:
+      enabled: ${INGEST_SCHEDULE_ENABLED:true}
+      # 20:30 New York time on weekdays, well after the 16:00 close.
+      cron: "0 30 20 * * MON-FRI"
+      zone: America/New_York
+      lookback-days: 7
