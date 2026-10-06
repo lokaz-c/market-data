@@ -33,7 +33,7 @@ flowchart LR
         view["bars_split_adjusted<br/>(view, window functions)"]
     end
     subgraph app["Spring Boot 4.1 on Java 25"]
-        api["REST API /v1<br/>problem details, keyset pages,<br/>rate limit, API key"]
+        api["REST API /v1<br/>problem details, keyset pages,<br/>ETags, rate limit, API key"]
         ui["Chart explorer<br/>(React, Lightweight Charts)"]
     end
     alpaca -- "retries, backoff + jitter" --> job & backfill
@@ -67,23 +67,42 @@ Testcontainers.
 
 | Endpoint | What it returns |
 |---|---|
-| `GET /v1/symbols?q=AA&limit=50` | Symbols that have data, with first/last bar and last close; prefix search |
-| `GET /v1/bars/{ticker}?from=&to=&after=&limit=&adjustment=split\|raw` | Daily bars, split-adjusted by default |
+| `GET /v1/symbols?q=AA&limit=50&after=` | Symbols that have data, a page at a time by ticker: first/last bar, last close, the feed of the last bar and when the symbol was last ingested; prefix search |
+| `GET /v1/bars/{ticker}?from=&to=&after=&limit=&adjustment=split\|raw` | Daily bars, split-adjusted by default, a page at a time by date |
+| `GET /v1/bars/{ticker}?last=N&to=` | The N latest bars on or before `to` (default: the latest bar), oldest first |
+| `GET /v1/splits/{ticker}` | Splits, oldest first, as Alpaca's old and new share counts |
 | `GET /v1/indicators/{ticker}?from=&to=&after=&limit=` | Per day: SMA 20/50/200, 20-day volatility, ATR 14, 52-week high/low, pivot, R1, S1 |
 | `GET /v1/levels/{ticker}?asOf=` | Pivots (P, R1-R3, S1-S3) from the last session, 20/50-day highs/lows, 52-week range |
-| `GET /v1/export/bars.csv?symbols=&from=&to=` | Streaming CSV for up to 100 symbols; needs `X-API-Key` |
+| `GET /v1/export/bars.csv?symbols=&from=&to=` | Streaming CSV for up to 100 symbols, with `source` and `feed` columns; needs `X-API-Key` |
 | `GET /actuator/health/{liveness,readiness}` | Liveness (no database) for the host; readiness (startup done, database up) for the UI |
 
 ```bash
 curl -s 'localhost:8080/v1/levels/S001'
 curl -s 'localhost:8080/v1/bars/S001?from=2026-01-02&to=2026-03-31&limit=2'   # follow nextAfter for the next page
+curl -s 'localhost:8080/v1/bars/S001?last=20'                                # the 20 latest bars
+curl -si 'localhost:8080/v1/bars/S001?last=20' -H 'If-None-Match: W/"..."'   # 304 while nothing has changed
 curl -s 'localhost:8080/v1/bars/NOPE'   # 404, application/problem+json
 ```
 
 - **Errors** are RFC 9457 problem details. Validation errors name the parameter that failed.
-- **Pagination** is keyset on the bar date. A page returns `nextAfter`, and the next request starts the day after
-  it. Each page is one range scan of the `(symbol_id, ts)` primary key, whatever its depth. OFFSET would read and
-  discard every earlier row, and rows inserted by the daily job would shift pages under a client.
+- **Pagination** is keyset: on the bar date for bars and indicators, on the ticker for symbols. A page returns
+  `nextAfter`; pass it back as `after`, and the next page starts just after it. Each page is one range scan of an
+  index, whatever its depth. OFFSET would read and discard every earlier row, and rows inserted by the daily job
+  would shift pages under a client.
+- **Latest bars.** `last=N` (at most 1,000) returns the N most recent bars as one page, without a cursor. It cannot
+  be combined with `from`, `after` or `limit`. The query reads the primary key backwards from `to` and stops after
+  N rows (see [Indexes](#indexes)).
+- **Conditional requests.** `/v1/bars` responses carry a weak `ETag`. Send it back in `If-None-Match` and the
+  response is `304 Not Modified`, with no body, until that symbol's bars or splits change. The validator is
+  `symbols.data_changed_at`, which triggers move on every such change (see [Data versions](#data-versions-for-etags)),
+  so a 304 reads one row and no bars. A new split re-bases all split-adjusted prices before it, so it changes the
+  ETag too; `/v1/splits/{ticker}` lists the splits themselves.
+- **Freshness and provenance.** `/v1/symbols` gives each symbol's `lastBar`, its `lastIngestedAt` (when the last
+  successful ingestion run that included it finished; null for synthetic data) and the `feed` of its last bar
+  (`iex` or `sip`). Bars carry `feed` when it was recorded, and the CSV export has `source` and `feed` columns.
+  `lastIngestedAt` is a column on `symbols`, written by the same statement that closes the run. Reading it from
+  `ingestion_runs` instead would mean finding the latest successful run that lists the ticker, which reads every
+  run that lists it: for a daily job, every run.
 - **Rate limiting:** public `/v1` requests get a token bucket per client IP, with a burst of 30 and then 60 per
   minute. Over the limit: 429 with `Retry-After`. Requests with a valid API key are not limited.
 - **API keys:** the service stores only SHA-256 digests (`API_KEY_SHA256`) and compares them in constant time. A
@@ -105,6 +124,7 @@ WHERE (b.open, b.high, b.low, b.close, b.volume, ...) IS DISTINCT FROM (excluded
 
 Re-running any range converges on the same rows. Unchanged rows are not rewritten, so a repeat run reports
 0 rows upserted and leaves no dead tuples. Each run is logged in `ingestion_runs` with counts, retries and errors.
+Bars record the Alpaca feed they were requested from; Alpaca's response does not name it.
 Alpaca calls retry 429, 5xx and I/O errors with exponential backoff and full jitter, and wait for
 `X-RateLimit-Reset` on a 429.
 
@@ -113,10 +133,37 @@ Alpaca calls retry 429, 5xx and I/O errors with exponential backoff and full jit
 The `bars_split_adjusted` view turns `splits` into date ranges with `LAG(ex_date)`. A cumulative factor for "this
 split and every later one" is computed with a window ordered by `ex_date DESC`. Old and new share counts are kept
 separately and multiplied with a custom `product(numeric)` aggregate. So a 3-for-2 followed by a 2-for-3 cancels to
-exactly 1; `exp(sum(ln(x)))` would give 0.99999...
+exactly 1; `exp(sum(ln(x)))` would give 0.99999... The split factors are a derived table rather than a `WITH`
+clause, so PostgreSQL can flatten the view into the queries that use it (see [Indexes](#indexes)).
 
 `SplitAdjustedViewIT` checks the view against Alpaca-shaped `adjustment=split` fixtures for AAPL's 4-for-1 and
 TSLA's 5-for-1 and 3-for-1 splits.
+
+### Data versions for ETags
+
+Every write to `bars` or `splits` moves `symbols.data_changed_at` for the symbols it touched, through
+statement-level `AFTER` triggers with transition tables
+([V3](src/main/resources/db/migration/V3__freshness_and_feed.sql)):
+
+```sql
+UPDATE symbols s
+SET data_changed_at = now()
+WHERE s.id IN (SELECT symbol_id FROM changed_rows)   -- the statement's transition table
+  AND s.data_changed_at IS DISTINCT FROM now();      -- at most once per transaction
+```
+
+- Statement-level, so the synthetic generator's single `INSERT ... SELECT` of 1.3 million bars costs one
+  semi-join, not 1.3 million trigger calls.
+- Rows an upsert leaves unchanged are not in the transition table, so an ingestion re-run that changes nothing
+  leaves every ETag as it was.
+- `now()` is the transaction's start time, so the guard writes each symbol row once per transaction. Without it,
+  a page of 10,000 batched upserts would stack 10,000 versions of one `symbols` row. `SchemaIT` checks this with
+  the row's `ctid`.
+- A trigger rather than application code, because ingestion, the synthetic generator and manual fixes in `psql`
+  all write bars.
+- The value is the start time of the last writing transaction, so two overlapping transactions can leave it
+  earlier than before. That is fine for an ETag, which is compared for equality, and it is why the API does not
+  expose it as a "last modified" time.
 
 ### Indicators
 
@@ -136,34 +183,46 @@ Indicator pages start their window 400 calendar days before the page, so SMA 200
 ## Measured performance
 
 These are local runs on synthetic data on an Apple M1 Pro (16 GiB, macOS 26.4) with Docker Desktop (8 CPUs,
-15.6 GiB). They are not production measurements.
+15.6 GiB). They are not production measurements. `make explain` was re-run after the V3 migration; the load test
+and cold start were measured before it (commit `d70abcb`) and have not been re-run.
 
 ### Indexes
 
 From [`make explain`](scripts/explain.py), written to [docs/explain.md](docs/explain.md). The dataset is 500
-synthetic symbols x 10 years: 1,305,000 bars, 126 MB of heap, inserted date by date like a daily job. Times are the
+synthetic symbols x 10 years: 1,305,000 bars, 136 MB of heap, inserted date by date like a daily job. Times are the
 median of 7 warm runs of the service's own SQL.
 
 | Query | No index | Primary key `(symbol_id, ts)` | PK + `CLUSTER` |
 |---|---:|---:|---:|
-| Bars page, 1 year | 47.06 ms | 1.27 ms | 0.59 ms |
-| Indicators page, 1 year | 60.93 ms | 14.87 ms | 13.81 ms |
-| Levels | 204.69 ms | 1.41 ms | 0.76 ms |
-| Symbol list with first/last bar (`LATERAL`) | 2,737.50 ms | 0.54 ms | 0.57 ms |
+| Bars page, 1 year | 49.64 ms | 1.17 ms | 0.49 ms |
+| Latest 100 bars (`last=100`) | 53.64 ms | 0.59 ms | 0.35 ms |
+| Indicators page, 1 year | 62.68 ms | 14.79 ms | 13.66 ms |
+| Levels | 215.70 ms | 1.32 ms | 0.65 ms |
+| Symbol list with first/last bar (`LATERAL`) | 3,849.24 ms | 0.53 ms | 0.55 ms |
 
 What the plans showed:
 
-- **The levels query read the whole symbol.** The first version joined its date bounds from a CTE, so they became
-  a filter applied after reading all 2,610 bars of the symbol. Turning them into scalar subqueries made them index
-  conditions: 9.93 ms became 1.41 ms with the primary key (2,632 buffers became 276). Both versions are in the
-  report.
+- **The split-adjusted view was a planner fence.** V2 computed the split factors in a `WITH` clause, and
+  PostgreSQL never flattens a subquery that has one, so the view always ran as a separate "Subquery Scan". Plain
+  filters were still pushed into it; join conditions and `ORDER BY ... LIMIT` were not. Two queries hit this:
+  - The first levels query joined its date bounds from a CTE, so they became a filter applied after reading all
+    2,610 bars of the symbol. Scalar subqueries, which run once as InitPlans and are pushed in like constants,
+    made them index conditions: 7.01 ms became 1.32 ms with the primary key (2,632 buffers became 276).
+  - `?last=100` read every bar of the symbol and kept 100 in a top-N heap sort: 7.62 ms and 2,624 buffers. V3
+    moved the split factors into a derived table. The view is now flattened, and the query is an index scan
+    backwards that stops after 100 rows: 0.59 ms and 107 buffers.
+
+  `make explain` creates a copy of the V2 view so both comparisons stay in the report.
 - **Indicators are bound by CPU, not I/O.** With the index, the indicators query reads 553 buffers, but most of its
   15 ms is spent in `WindowAgg`. The 52-week `max`/`min` is about half of that: PostgreSQL recomputes `max`/`min`
   for every row of a moving frame because they have no inverse transition function.
 - **Physical order matters.** A daily job writes rows date by date, so one symbol's bars are scattered across the
-  heap: a one-year bars page touches 269 buffers. After `CLUSTER bars USING bars_pkey` it touches 11 and runs twice
-  as fast. But CLUSTER takes an exclusive lock and is not maintained for new rows, so it is a periodic maintenance
-  step, not a schema change.
+  heap: a one-year bars page touches 269 buffers. After `CLUSTER bars USING bars_pkey` it touches 11 and takes
+  less than half the time. But CLUSTER takes an exclusive lock and is not maintained for new rows, so it is a
+  periodic maintenance step, not a schema change.
+- **A NULL column is not free.** The heap grew from 126 MB to 136 MB when V3 added `bars.feed`. A synthetic bar's
+  NULL feed gives the row a null bitmap, which pushes the tuple header from 24 to 32 bytes; an `iex` value costs
+  4 bytes, padded to 8. (Checked with `pageinspect`'s `heap_page_items`.)
 
 ### Load test
 
@@ -204,17 +263,17 @@ database. Two runs per variant:
 
 ## Tests
 
-`./mvnw verify` runs 48 unit tests and 44 integration tests. The integration tests run against a real PostgreSQL 18
+`./mvnw verify` runs 48 unit tests and 68 integration tests. The integration tests run against a real PostgreSQL 18
 (Testcontainers), with WireMock standing in for Alpaca. One case is skipped until real Alpaca recordings exist (see
 TODO below). `web/` has 16 Vitest tests. CI runs everything, plus lint, typecheck and a production build, on every
 push and pull request.
 
 | Area | What is tested |
 |---|---|
-| Ingestion (`IngestionServiceIT`) | Running twice gives the same rows and 0 upserts; an upstream correction updates 1 row; invalid bars are skipped and counted; 429 retried and logged; persistent 5xx logged as a failed run; pages written before a failure are kept; future splits ignored |
+| Ingestion (`IngestionServiceIT`) | Running twice gives the same rows and 0 upserts; an upstream correction updates 1 row; invalid bars are skipped and counted; 429 retried and logged; persistent 5xx logged as a failed run; pages written before a failure are kept; future splits ignored; the feed recorded on each bar; a successful run recorded on each symbol, a failed one not; data versions unchanged by an identical re-run and moved by a correction |
 | Alpaca client (`AlpacaClientTest`, `RetrierTest`) | Query parameters and keys; `next_page_token` pagination with an encoded token; symbol chunking; New York session dates in summer and winter; waiting for `X-RateLimit-Reset`; giving up; no retry on 403; full-jitter bounds |
-| SQL (`SplitAdjustedViewIT`, `IndicatorsIT`, `SchemaIT`) | View vs Alpaca-shaped split-adjusted fixtures; compounding, reverse and offsetting splits; every indicator vs a Java reference; hand-computed pivots; CHECK constraints |
-| API (`BarsApiIT`, `ExportIT`, `RateLimitFilterTest`, `OpenApiIT`) | Keyset pages cover a range once and in order; problem-detail bodies; parameter validation; synthetic vs Alpaca visibility with and without a key; CSV export; 429 with `Retry-After` |
+| SQL (`SplitAdjustedViewIT`, `IndicatorsIT`, `SchemaIT`) | View vs Alpaca-shaped split-adjusted fixtures; compounding, reverse and offsetting splits; every indicator vs a Java reference; hand-computed pivots; CHECK constraints; data-version triggers: one row version per transaction, no change for a statement that writes nothing, deletes count |
+| API (`BarsApiIT`, `ConditionalBarsIT`, `SymbolsApiIT`, `SplitsApiIT`, `FreshnessApiIT`, `ExportIT`, `RateLimitFilterTest`, `OpenApiIT`) | Keyset pages cover a range once and in order, for bars and for symbols; `last=N` with and without `to`, raw and adjusted, and its invalid combinations; 304 for a matching `If-None-Match`, a new ETag after a new bar or split, none for errors; splits; feed and last ingestion after real ingestion runs; problem-detail bodies; parameter validation; synthetic vs Alpaca visibility with and without a key; CSV export with `source` and `feed`; 429 with `Retry-After` |
 | Synthetic data (`SyntheticDataIT`) | Expected row count, all rows labelled synthetic, same seed gives same data, no jump in the adjusted series at synthetic splits |
 
 ## Why these technologies
