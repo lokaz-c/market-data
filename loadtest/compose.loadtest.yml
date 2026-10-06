@@ -1,0 +1,15 @@
+# Overrides for scripts/loadtest.sh: explicit resource limits so the numbers say what they ran on,
+# 500 synthetic symbols, and no per-IP rate limit (k6 sends everything from one IP).
+services:
+  db:
+    cpus: 2
+    mem_limit: 2g
+  app:
+    cpus: 2
+    mem_limit: 1g
+    environment:
+      DEMO_SEED: always
+      DEMO_SYMBOLS: "500"
+      DEMO_YEARS: "10"
+      RATE_LIMIT_ENABLED: "false"
+      DB_POOL_SIZE: "10"
